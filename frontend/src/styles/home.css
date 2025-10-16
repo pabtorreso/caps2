@@ -1,0 +1,155 @@
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500&display=swap');
+
+body {
+  font-family: 'Poppins', sans-serif;
+  margin: 0;
+  padding: 0;
+  position: relative;
+  background: none;
+}
+
+body.content-ready {
+  visibility: visible;
+}
+
+body.with-bg::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: url('/src/assets/imagenes/Mantemin.jpeg') no-repeat center center fixed;
+  background-size: cover;
+  z-index: -2;
+}
+
+body.with-bg::after {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(255, 255, 255, 0.6);
+  z-index: -1;
+}
+
+/* Contenedor principal del home */
+.container-home {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 80vh;
+  padding: 2rem;
+  padding-left: 5rem;
+}
+
+/* Tarjeta moderna */
+.card-home {
+  background-color: white;
+  padding: 2rem 3rem;
+  border-radius: 16px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.15);
+  text-align: center;
+  max-width: 280px;
+  height: 480px;
+  width: 100%;
+  transition: transform 0.3s ease;
+}
+
+.card-home:hover {
+  transform: translateY(-5px);
+}
+
+/* Elementos dentro de la tarjeta */
+.titulo-home {
+  font-size: 2rem;
+  font-weight: 600;
+  color: #1f2937;
+  margin-bottom: 0.5rem;
+}
+
+.icono-checklist {
+  width: 110px;
+  height: 110px;
+  margin: 1rem auto;
+}
+
+.bienvenida-home {
+  font-size: 1.1rem;
+  color: #111827;
+  margin-top: 0.5rem;
+}
+
+.descripcion-home {
+  color: #4b5563;
+  margin-bottom: 2rem;
+}
+
+/* Botón elegante */
+.btn-home {
+  background-color: #f97316;
+  color: white;
+  font-weight: 600;
+  padding: 0.75rem 2rem;
+  font-size: 1rem;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.3s ease;
+}
+
+.btn-home:hover {
+  background-color: #ea580c;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .card-home {
+    padding: 1.5rem 2rem;
+    max-width: 90%;
+  }
+
+  .titulo-home {
+    font-size: 1.6rem;
+  }
+
+  .btn-home {
+    width: 100%;
+  }
+}
+
+
+.pin-input-group {
+  position: relative;
+}
+
+
+.toggle-visibility {
+  position: absolute;
+  left: 300px !important;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #6b7280 !important;
+  font-size: 1.2rem;
+  cursor: pointer;
+  transition: color 0.3s ease;
+}
+.form-control {
+  padding-right: 2.2rem; 
+}
+
+.toggle-visibility:hover {
+  color: #f97316; 
+}
+.toggle-visibility::before {
+  content: "";
+  position: absolute;
+  right: 30px !important;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 100%;
+  width: 2px;
+  background-color: #d1d5db;
+}

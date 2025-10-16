@@ -1,0 +1,128 @@
+.navbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  background-color: #ffffff;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
+  z-index: 999;
+  height: 50px;
+}
+
+.container-fluid {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  position: relative;
+  margin: 0; 
+  padding: 0 1rem;
+}
+
+
+.token-timer {
+  color: #2c5886;
+  font-size: 0.95rem;
+  font-weight: 500;
+  display: flex;
+  margin-top: 15px;
+}
+
+
+/* Logo centrado */
+.navbar-center {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.indemin-logo {
+  height: 25px;
+  margin-top: 15px;
+}
+
+/* Triángulo decorativo */
+.triangle {
+  width: 0;
+  height: 0;
+  border-left: 60px solid transparent;
+  border-right: 60px solid transparent;
+  border-top: 35px solid #ffffff;
+  position: absolute;
+  top: 45px;}
+
+.home-icon {
+  height: 24px;
+  width: 24px;
+  color: #2c5886;
+  position: absolute;
+  top: -32px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+}
+
+
+/* Usuario y dropdown nativo en React */
+.navbar-user {
+  position: relative;
+  align-items: center;
+  cursor: pointer;
+  color: #2c5886;
+  font-weight: 500;
+  height: 100%;
+  padding-right: 60px;
+  margin-top: 15px;
+
+}
+
+.user-display {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.username {
+  max-width: 120px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.95rem;
+  color: #2c5886;
+}
+
+.custom-dropdown {
+  position: absolute;
+  top: 40px;
+  background: white;
+  box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+  border-radius: 8px;
+  min-width: 50px;
+}
+
+.custom-dropdown .dropdown-item {
+  padding: 10px 15px;
+  font-size: 0.9rem;
+  color: #1f2937;
+  background-color: white;
+  border: none;
+  text-align: left;
+  width: 100%;
+  cursor: pointer;
+}
+
+.custom-dropdown .dropdown-item:hover {
+  background-color: #f3f4f6;
+}
+
+.user-display img {
+  width: 20px;
+  height: 20px;
+  margin-right: 6px;
+  filter: invert(29%) sepia(36%) saturate(459%) hue-rotate(180deg) brightness(95%) contrast(89%);
+}
+
+.user-icon {
+  width: 20px;
+  height: 20px;
+  color: #2c5886;
+}
