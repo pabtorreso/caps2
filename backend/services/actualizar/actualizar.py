@@ -2,12 +2,15 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Callable, Optional
-import re 
+import re
+import warnings
 
 import psycopg2
 import pandas as pd
 from psycopg2.extras import execute_values
 from dotenv import load_dotenv
+
+warnings.filterwarnings("ignore", category=UserWarning, module="pandas.io.sql")
 
 # ============================================================
 # .env
@@ -39,9 +42,9 @@ DB_DESTINO = (
 )
 
 # ============================================================
-# Query de extracción (igual a Esteban, sin ORDER BY final)
+# QUERIES
 # ============================================================
-QUERY_ORIGEN = """
+QUERY_REPROGRAMACION = """
 WITH ordenes AS (
     SELECT
         nombre_faena,
@@ -52,7 +55,6 @@ WITH ordenes AS (
         numero_otm AS otm_desc,
         fecha_inicio,
         motivo_no_cumplimiento AS motivo_reprogramacion_desc,
-        -- Genera un número de secuencia para cada OT, ordenado por fecha de inicio.
         ROW_NUMBER() OVER (PARTITION BY numero_otm ORDER BY fecha_inicio ASC) AS rn
     FROM
         consultas_cgo_ext.v_reg_historico_ot_orden
@@ -71,37 +73,78 @@ SELECT
 FROM
     ordenes
 WHERE
-    rn > 1; -- Filtra solo las reprogramaciones (segunda ocurrencia en adelante)
+    rn > 1;
 """
 
-
+QUERY_COMPRAS = """
+WITH ot_mantenimiento AS (
+    SELECT
+        motivo_compra,
+        item_material_o_servicio
+    FROM consultas_cgo_ext.v_sol_items_otm_otr
+    WHERE motivo_compra IS NOT NULL 
+       OR item_material_o_servicio IS NOT NULL
+)
+SELECT DISTINCT
+    motivo_compra,
+    item_material_o_servicio
+FROM ot_mantenimiento;
+"""
 
 # ============================================================
-# Helpers (lógica Esteban modificada con limpieza extrema)
+# CONSTANTES COMPRAS
 # ============================================================
-def limpiar_motivos(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Limpia textos y normaliza valores nulos.
-    Se añade limpieza extrema para eliminar caracteres invisibles.
-    """
+ABREVIACIONES = {
+    'hrs': 'horas', 'mtto': 'mantenimiento', 'mant': 'mantenimiento',
+    'rep': 'reparacion', 'serv': 'servicio', 'equip': 'equipo',
+    'flex': 'flexible', 'fabr': 'fabricacion', 'trasl': 'traslado',
+    'comb': 'combustible', 'lubr': 'lubricante', 'filt': 'filtro',
+    'camb': 'cambio', 'inst': 'instalacion', 'sist': 'sistema',
+}
+
+TERMINOS_MOTIVOS = {
+    'mantenimiento', 'reparacion', 'cambio', 'instalacion', 'fabricacion',
+    'servicio', 'traslado', 'inspeccion', 'revision', 'limpieza',
+    'lavado', 'pintura', 'soldadura', 'calibracion', 'ajuste',
+    'cotizacion', 'compra', 'reemplazo', 'desmontaje', 'montaje',
+    'certificacion', 'prueba', 'diagnostico', 'evaluacion'
+}
+
+TERMINOS_ITEMS = {
+    'filtro', 'aceite', 'combustible', 'flexible', 'neumatico',
+    'kit', 'repuesto', 'componente', 'sistema', 'motor', 'freno',
+    'cabina', 'vidrio', 'lubricante', 'sello', 'bomba', 'valvula',
+    'sensor', 'manguera', 'correa', 'bateria', 'alternador',
+    'acumulador', 'adaptador', 'abrazadera', 'conexion', 'empaque',
+    'junta', 'perno', 'tuerca', 'tornillo', 'placa', 'lamina',
+    'rodamiento', 'retenes', 'cojinete', 'eje', 'engrane',
+    'cilindro', 'piston', 'biela', 'carburador', 'inyector',
+    'turbo', 'radiador', 'ventilador', 'compresor', 'condensador',
+    'evaporador', 'amortiguador', 'suspension', 'resorte', 'barra',
+    'varilla', 'vastago', 'bulon', 'pasador', 'chaveta',
+    'polea', 'tensor', 'damper', 'volante', 'embrague',
+    'clutch', 'transmision', 'diferencial', 'corona', 'pinon',
+    'cadena', 'oruga', 'zapata', 'rodillo', 'buje', 'casquillo',
+    'espaciador', 'arandela', 'retenedor', 'guardapolvo', 'fuelle',
+    'tapa', 'cubierta', 'protector', 'relay', 'fusible',
+    'contactor', 'interruptor', 'switch', 'caudalimetro',
+    'manometro', 'termometro', 'tacometro', 'indicador',
+    'medidor', 'transmisor', 'receptor', 'llave', 'broca',
+    'disco', 'esmeril', 'soldador', 'electrodo', 'alambre'
+}
+
+# ============================================================
+# LIMPIEZA REPROGRAMACION
+# ============================================================
+def limpiar_motivos_reprogramacion(df: pd.DataFrame) -> pd.DataFrame:
     columna = 'motivo_reprogramacion_desc'
-    
-    # 1. Rellenar nulos temporalmente con vacío para aplicar operaciones de cadena
     df[columna] = df[columna].fillna('')
-
-    # 2. Eliminar todos los caracteres que no sean letras, números o espacios (limpieza extrema)
     df[columna] = df[columna].apply(lambda x: re.sub(r'[^\w\s]', '', str(x)))
-    
-    # 3. Reemplazar múltiples espacios con un solo espacio y limpiar espacios
     df[columna] = df[columna].str.replace(r'\s+', ' ', regex=True).str.strip()
-    
-    # 4. Convertir vacíos explícitamente a None
     df[columna] = df[columna].replace('', None)
-    
     return df
 
 def imputar_motivos_estadisticos(df: pd.DataFrame) -> pd.DataFrame:
-    """Imputa los motivos faltantes basándose en patrones históricos (moda por actividad/estado)."""
     base = df.dropna(subset=["motivo_reprogramacion_desc"]).copy()
 
     moda_actividad = (
@@ -131,12 +174,99 @@ def imputar_motivos_estadisticos(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 # ============================================================
-# Proceso completo (misma firma, con callback opcional)
+# LIMPIEZA COMPRAS
 # ============================================================
-def ejecutar_proceso(callback: Optional[Callable[..., None]] = None) -> dict:
-    """
-    Full refresh con lógica de Esteban, con filtro explícito de OTROS/CAMBIO DE PROGRAMA.
-    """
+def normalizar_texto(texto):
+    if pd.isna(texto) or texto == '':
+        return None
+    
+    texto = str(texto).lower().strip()
+    
+    if re.match(r'^\d{6,}[a-z]?$', texto):
+        return None
+    
+    texto = texto.replace('\r\n', ' ').replace('\n', ' ').replace('\r', ' ').replace('\t', ' ')
+    texto = re.sub(r'\b\d{1,2}[-/]\d{1,2}[-/]\d{2,4}\b', '', texto)
+    texto = re.sub(r'\b[a-z]{2}-\d{1,3}\b', '', texto)
+    texto = re.sub(r'\b[mr]\d{7}\b', '', texto)
+    texto = re.sub(r'^\s*-?\d+\s+', '', texto)
+    texto = re.sub(r'^-\s*', '', texto)
+    
+    if re.match(r'^-?\d+k?m?$', texto.strip()):
+        return None
+    
+    for a, s in {'á':'a','é':'e','í':'i','ó':'o','ú':'u','ñ':'n'}.items():
+        texto = texto.replace(a, s)
+    
+    texto = re.sub(r'[^\w\s-]', ' ', texto)
+    texto = re.sub(r'\s+', ' ', texto).strip()
+    
+    if len(texto) < 3 or re.match(r'^[a-z]\s+[a-z]$', texto):
+        return None
+    
+    return texto if texto else None
+
+def expandir_abreviaciones(texto):
+    if not texto:
+        return None
+    palabras = [ABREVIACIONES.get(p, p) for p in texto.split()]
+    return ' '.join(palabras)
+
+def extraer_concepto_principal(texto, diccionario_terminos):
+    if not texto:
+        return None
+    
+    for palabra in texto.split():
+        if palabra in diccionario_terminos:
+            return palabra
+    
+    return None
+
+def estandarizar_motivo(texto):
+    if pd.isna(texto) or texto == '':
+        return None
+    
+    texto = normalizar_texto(texto)
+    if not texto:
+        return None
+    
+    texto = expandir_abreviaciones(texto)
+    if not texto:
+        return None
+    
+    concepto = extraer_concepto_principal(texto, TERMINOS_MOTIVOS)
+    if not concepto:
+        return None
+    
+    return concepto.strip() if len(concepto.strip()) >= 3 else None
+
+def estandarizar_item(texto):
+    if pd.isna(texto) or texto == '':
+        return None
+    
+    texto = normalizar_texto(texto)
+    if not texto:
+        return None
+    
+    texto = expandir_abreviaciones(texto)
+    if not texto:
+        return None
+    
+    concepto = extraer_concepto_principal(texto, TERMINOS_ITEMS)
+    if not concepto:
+        return None
+    
+    return concepto.strip() if len(concepto.strip()) >= 3 else None
+
+def limpiar_motivos_items(df):
+    df['motivo_compra_limpio'] = df['motivo_compra'].apply(estandarizar_motivo)
+    df['item_limpio'] = df['item_material_o_servicio'].apply(estandarizar_item)
+    return df
+
+# ============================================================
+# PROCESO REPROGRAMACION
+# ============================================================
+def ejecutar_proceso_reprogramacion(conn_src, conn_dst, callback=None):
     def _ping(paso: str, p: int | None = None):
         if callback:
             try:
@@ -144,110 +274,166 @@ def ejecutar_proceso(callback: Optional[Callable[..., None]] = None) -> dict:
             except Exception:
                 pass
 
-    _ping("Conectando a orígenes", 1)
+    _ping("Extrayendo reprogramaciones", 5)
+    df = pd.read_sql_query(QUERY_REPROGRAMACION, conn_src)
+    total = int(len(df))
+
+    _ping("Limpiando motivos reprogramación", 15)
+    df = limpiar_motivos_reprogramacion(df)
+
+    _ping("Imputando motivos", 25)
+    df = imputar_motivos_estadisticos(df)
+
+    _ping("Filtrando registros", 35)
+    motivos_upper = df["motivo_reprogramacion_desc"].astype(str).str.strip().str.upper()
+    motivos_a_excluir = ["OTROS", "CAMBIO DE PROGRAMA"]
+    mascara_exclusion = ~motivos_upper.isin(motivos_a_excluir)
+    df_filtrado = df[mascara_exclusion].copy()
+    df_final = df_filtrado.dropna(subset=["motivo_reprogramacion_desc"]).copy()
+    no_imputados = int(total - len(df_final))
+
+    _ping("Truncando tablas reprogramación", 45)
+    with conn_dst.cursor() as cur:
+        cur.execute("TRUNCATE TABLE public.reprogramacion_otm RESTART IDENTITY CASCADE;")
+        cur.execute("TRUNCATE TABLE public.motivo_reprogramacion RESTART IDENTITY CASCADE;")
+    conn_dst.commit()
+
+    _ping("Insertando motivos", 55)
+    motivos_unicos = df_final["motivo_reprogramacion_desc"].dropna().unique()
+    motivos_insertados = 0
+    if len(motivos_unicos) > 0:
+        with conn_dst.cursor() as cur:
+            execute_values(
+                cur,
+                "INSERT INTO public.motivo_reprogramacion (motivo_reprogramacion_desc) VALUES %s;",
+                [(str(m),) for m in motivos_unicos],
+            )
+        conn_dst.commit()
+        motivos_insertados = int(len(motivos_unicos))
+
+    _ping("Insertando reprogramaciones", 65)
+    motivos = pd.read_sql_query(
+        "SELECT motivo_reprogramacion_id, motivo_reprogramacion_desc FROM public.motivo_reprogramacion;",
+        conn_dst,
+    )
+    otm = pd.read_sql_query(
+        "SELECT otm_id, otm_desc FROM public.orden_man;",
+        conn_dst,
+    )
+
+    df_final = df_final.merge(motivos, on="motivo_reprogramacion_desc", how="left")
+    df_final = df_final.merge(otm, on="otm_desc", how="left")
+    df_final = df_final.dropna(subset=["otm_id", "motivo_reprogramacion_id"]).copy()
+
+    registros_insertados = 0
+    if not df_final.empty:
+        df_final = df_final.sort_values(["otm_id", "fecha_inicio"])
+        df_final["n_reprogramacion"] = df_final.groupby("otm_id").cumcount() + 1
+
+        registros = [
+            (int(r.otm_id), int(r.n_reprogramacion), r.fecha_inicio, int(r.motivo_reprogramacion_id))
+            for _, r in df_final.iterrows()
+        ]
+
+        with conn_dst.cursor() as cur:
+            execute_values(
+                cur,
+                """
+                INSERT INTO public.reprogramacion_otm
+                    (otm_id, n_reprogramacion, fecha_inicio, motivo_reprogramacion_id)
+                VALUES %s;
+                """,
+                registros,
+            )
+        conn_dst.commit()
+        registros_insertados = int(len(registros))
+
+    return {
+        "registros_extraidos": total,
+        "motivos_insertados": motivos_insertados,
+        "reprogramaciones_insertadas": registros_insertados,
+        "registros_no_imputados": no_imputados
+    }
+
+# ============================================================
+# PROCESO COMPRAS
+# ============================================================
+def ejecutar_proceso_compras(conn_src, conn_dst, callback=None):
+    def _ping(paso: str, p: int | None = None):
+        if callback:
+            try:
+                callback(paso=paso, progreso=p)
+            except Exception:
+                pass
+
+    _ping("Extrayendo compras", 70)
+    df = pd.read_sql_query(QUERY_COMPRAS, conn_src)
+    total = int(len(df))
+
+    _ping("Limpiando motivos e items", 75)
+    df = limpiar_motivos_items(df)
+
+    _ping("Deduplicando catálogos", 80)
+    motivos_unicos = sorted(set(df['motivo_compra_limpio'].dropna().unique().tolist()))
+    items_unicos = sorted(set(df['item_limpio'].dropna().unique().tolist()))
+
+    _ping("Truncando tablas compras", 85)
+    with conn_dst.cursor() as cur:
+        cur.execute("TRUNCATE TABLE public.motivo_compra RESTART IDENTITY CASCADE;")
+        cur.execute("TRUNCATE TABLE public.item RESTART IDENTITY CASCADE;")
+    conn_dst.commit()
+
+    _ping("Insertando catálogos", 90)
+    motivos_insertados = 0
+    items_insertados = 0
+    
+    if motivos_unicos:
+        with conn_dst.cursor() as cur:
+            execute_values(cur, "INSERT INTO public.motivo_compra (motvo_compra_desc) VALUES %s;", [(m,) for m in motivos_unicos])
+        conn_dst.commit()
+        motivos_insertados = len(motivos_unicos)
+    
+    if items_unicos:
+        with conn_dst.cursor() as cur:
+            execute_values(cur, "INSERT INTO public.item (item_desc) VALUES %s;", [(i,) for i in items_unicos])
+        conn_dst.commit()
+        items_insertados = len(items_unicos)
+
+    return {
+        "registros_extraidos": total,
+        "motivos_insertados": motivos_insertados,
+        "items_insertados": items_insertados
+    }
+
+# ============================================================
+# PROCESO COMPLETO
+# ============================================================
+def ejecutar_proceso(callback: Optional[Callable[..., None]] = None) -> dict:
+    def _ping(paso: str, p: int | None = None):
+        if callback:
+            try:
+                callback(paso=paso, progreso=p)
+            except Exception:
+                pass
+
+    _ping("Conectando a bases de datos", 1)
     with psycopg2.connect(DB_ORIGEN) as conn_src, psycopg2.connect(DB_DESTINO) as conn_dst:
         conn_src.set_session(readonly=True, autocommit=False)
         conn_dst.set_session(autocommit=False)
 
-        # 1) Extraer
-        _ping("Extrayendo desde ERP", 5)
         with conn_src.cursor() as c:
             c.execute("SET LOCAL statement_timeout = '10min';")
-        df = pd.read_sql_query(QUERY_ORIGEN, conn_src)
-        total = int(len(df))
 
-        # 2) Limpiar + imputar (Lógica Esteban con limpieza extrema)
-        _ping("Limpiando motivos", 15)
-        df = limpiar_motivos(df)
+        # Pipeline 1: Reprogramaciones
+        resultado_reprog = ejecutar_proceso_reprogramacion(conn_src, conn_dst, callback)
 
-        _ping("Imputando motivos (moda)", 30)
-        df = imputar_motivos_estadisticos(df)
-
-        # 3) Filtrar y Excluir (El paso crucial para tu requerimiento)
-        _ping("Filtrando registros (excluyendo y descartando nulos)", 40)
-
-        # 3.1) Excluir explícitamente OTROS y CAMBIO DE PROGRAMA (Regla de negocio)
-        # Convertimos la columna a mayúsculas para la comparación y filtramos.
-        motivos_upper = df["motivo_reprogramacion_desc"].astype(str).str.strip().str.upper()
-        motivos_a_excluir = ["OTROS", "CAMBIO DE PROGRAMA"]
-        
-        # Máscara para mantener solo los que NO estén en la lista de exclusión
-        mascara_exclusion = ~motivos_upper.isin(motivos_a_excluir)
-        df_filtrado = df[mascara_exclusion].copy()
-
-        # 3.2) Filtrar filas sin motivo final (lógica dropna de Esteban)
-        # Esto elimina los registros que no se pudieron imputar.
-        df_final = df_filtrado.dropna(subset=["motivo_reprogramacion_desc"]).copy()
-        
-        no_imputados = int(total - len(df_final))
-
-        # 4) TRUNCATE destino
-        _ping("Truncando tablas destino", 55)
-        with conn_dst.cursor() as cur:
-            # Reconfirmamos el TRUNCATE CASCADE para asegurar que no queden datos antiguos.
-            cur.execute("TRUNCATE TABLE public.reprogramacion_otm RESTART IDENTITY CASCADE;")
-            cur.execute("TRUNCATE TABLE public.motivo_reprogramacion RESTART IDENTITY CASCADE;")
-        conn_dst.commit()
-
-        # 5) Insert catálogo de motivos
-        _ping("Insertando catálogo de motivos", 70)
-        motivos_unicos = df_final["motivo_reprogramacion_desc"].dropna().unique()
-        motivos_insertados = 0
-        if len(motivos_unicos) > 0:
-            with conn_dst.cursor() as cur:
-                execute_values(
-                    cur,
-                    "INSERT INTO public.motivo_reprogramacion (motivo_reprogramacion_desc) VALUES %s;",
-                    [(str(m),) for m in motivos_unicos],
-                )
-            conn_dst.commit()
-            motivos_insertados = int(len(motivos_unicos))
-
-        # 6) Insert reprogramaciones
-        _ping("Insertando reprogramaciones", 85)
-        motivos = pd.read_sql_query(
-            "SELECT motivo_reprogramacion_id, motivo_reprogramacion_desc FROM public.motivo_reprogramacion;",
-            conn_dst,
-        )
-        otm = pd.read_sql_query(
-            "SELECT otm_id, otm_desc FROM public.orden_man;",
-            conn_dst,
-        )
-
-        df_final = df_final.merge(motivos, on="motivo_reprogramacion_desc", how="left")
-        df_final = df_final.merge(otm, on="otm_desc", how="left")
-        df_final = df_final.dropna(subset=["otm_id", "motivo_reprogramacion_id"]).copy()
-
-        registros_insertados = 0
-        if not df_final.empty:
-            df_final = df_final.sort_values(["otm_id", "fecha_inicio"])
-            df_final["n_reprogramacion"] = df_final.groupby("otm_id").cumcount() + 1
-
-            registros = [
-                (int(r.otm_id), int(r.n_reprogramacion), r.fecha_inicio, int(r.motivo_reprogramacion_id))
-                for _, r in df_final.iterrows()
-            ]
-
-            with conn_dst.cursor() as cur:
-                execute_values(
-                    cur,
-                    """
-                    INSERT INTO public.reprogramacion_otm
-                        (otm_id, n_reprogramacion, fecha_inicio, motivo_reprogramacion_id)
-                    VALUES %s;
-                    """,
-                    registros,
-                )
-            conn_dst.commit()
-            registros_insertados = int(len(registros))
+        # Pipeline 2: Compras
+        resultado_compras = ejecutar_proceso_compras(conn_src, conn_dst, callback)
 
     _ping("Finalizado", 100)
     return {
         "status": "success",
-        "mensaje": "Proceso completado correctamente",
-        "registros_extraidos": total,
-        "motivos_insertados": motivos_insertados,
-        "reprogramaciones_insertadas": registros_insertados,
-        "registros_no_imputados": no_imputados,
-        "modo": "full_refresh_truncate_esteban"
+        "mensaje": "Ambos pipelines completados",
+        "reprogramaciones": resultado_reprog,
+        "compras": resultado_compras
     }
