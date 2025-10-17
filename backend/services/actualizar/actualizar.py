@@ -424,6 +424,18 @@ def ejecutar_proceso(callback: Optional[Callable[..., None]] = None) -> dict:
         with conn_src.cursor() as c:
             c.execute("SET LOCAL statement_timeout = '10min';")
 
+        # Insertar catálogos desde remoto
+        _ping("Insertando catálogos desde remoto", 2)
+        with conn_dst.cursor() as cur:
+            cur.execute("CALL public.insertar_modelos_desde_remoto();")
+            cur.execute("CALL public.insertar_marcas_desde_remoto();")
+            cur.execute("CALL public.insertar_tipos_equipo_desde_remoto();")
+            cur.execute("CALL public.insertar_equipos_desde_remoto();")
+            cur.execute("CALL public.insertar_proximo_mantenimiento_desde_remoto();")
+            cur.execute("CALL public.insertar_programas_desde_remoto();")
+            cur.execute("CALL public.insertar_orden_man_desde_remoto();")
+        conn_dst.commit()
+
         # Pipeline 1: Reprogramaciones
         resultado_reprog = ejecutar_proceso_reprogramacion(conn_src, conn_dst, callback)
 

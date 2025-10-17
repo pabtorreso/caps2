@@ -1,8 +1,4 @@
 # backend/endpoints/query/reprogramaciones/reprogrmaciones.py
-# -------------------------------------------------------------------
-# Reprogramaciones – anclado en Programa (Programa.faena_id / equipo_id)
-# Marca/Modelo: Equipo -> TipoEquipo (marca_id) -> Marca -> Modelo
-# -------------------------------------------------------------------
 from __future__ import annotations
 
 from flask import Blueprint, request, jsonify
@@ -132,7 +128,6 @@ def listar_reprogramaciones():
     desde_ts = _parse_date(request.args.get("desde"))
     hasta_ts = _parse_date(request.args.get("hasta"))
     if hasta_ts:
-        # incluir el día completo
         hasta_ts = hasta_ts + timedelta(days=1)
 
     limit  = request.args.get("limit",  default=100, type=int)
@@ -140,13 +135,11 @@ def listar_reprogramaciones():
 
     db = next(get_db())
     try:
-        # Aliases
         Eq = aliased(Equipo)
         Te = aliased(TipoEquipo)
         Ma = aliased(Marca)
         Mo = aliased(Modelo)
 
-        # Subconsulta de reprogramaciones por OTM
         r_sub = (
             db.query(
                 ReprogramacionOtm.otm_id.label("otm_id"),
@@ -163,7 +156,6 @@ def listar_reprogramaciones():
             .subquery()
         )
 
-        # Query principal
         q = (
             db.query(
                 OrdenMan.otm_id.label("id_programa_otm"),
@@ -191,13 +183,12 @@ def listar_reprogramaciones():
             .join(Programa, OrdenMan.programa_id == Programa.programa_id)
             .join(Eq, Eq.equipo_id == Programa.equipo_id)
             .join(Te, Te.tipo_equipo_id == Eq.tipo_equipo_id)
-            .join(Ma, Ma.marca_id == Te.marca_id)       # Equipo->TipoEquipo->Marca
-            .join(Mo, Mo.modelo_id == Ma.modelo_id)     # Marca->Modelo
+            .join(Ma, Ma.marca_id == Te.marca_id)
+            .join(Mo, Mo.modelo_id == Ma.modelo_id)
             .join(Faena, Faena.faena_id == Programa.faena_id)
             .outerjoin(r_sub, r_sub.c.otm_id == OrdenMan.otm_id)
         )
 
-        # Filtros
         if faena_id:
             q = q.filter(Programa.faena_id == faena_id)
         if tipo_id:
@@ -205,47 +196,58 @@ def listar_reprogramaciones():
         if equipo_id:
             q = q.filter(Eq.equipo_id == equipo_id)
 
-        # Filtro por fechas sobre la fecha de inicio real (sin perder filas sin reprog)
-        if desde_ts:
-            q = q.filter(or_(r_sub.c.reg_fecha_inicio_real.is_(None),
-                             r_sub.c.reg_fecha_inicio_real >= desde_ts))
-        if hasta_ts:
-            q = q.filter(or_(r_sub.c.reg_fecha_inicio_real.is_(None),
-                             r_sub.c.reg_fecha_inicio_real <  hasta_ts))
+        if desde_ts or hasta_ts:
+            if desde_ts and hasta_ts:
+                q = q.filter(
+                    or_(
+                        r_sub.c.reg_fecha_inicio_real.between(desde_ts, hasta_ts),
+                        r_sub.c.reg_fecha_inicio_real.is_(None)
+                    )
+                )
+            elif desde_ts:
+                q = q.filter(
+                    or_(
+                        r_sub.c.reg_fecha_inicio_real >= desde_ts,
+                        r_sub.c.reg_fecha_inicio_real.is_(None)
+                    )
+                )
+            elif hasta_ts:
+                q = q.filter(
+                    or_(
+                        r_sub.c.reg_fecha_inicio_real <= hasta_ts,
+                        r_sub.c.reg_fecha_inicio_real.is_(None)
+                    )
+                )
 
-        rows = q.order_by(OrdenMan.otm_id.asc()).limit(limit).offset(offset).all()
+        q = q.order_by(r_sub.c.reprogramaciones_cantidad.desc().nullslast())
+        q = q.limit(limit).offset(offset)
 
-        data = [{
-            "id_programa_otm": r.id_programa_otm,
-            "otm_numero": r.otm_numero,
-            "otm_usuario_programador": r.otm_usuario_programador,
-            "otm_disponibilidad_insumos": r.otm_disponibilidad_insumos,
-            "otm_codigo_tarea": None,
-            "otm_prioridad": None,
-            "otm_instrucciones_especiales": None,
-            "otm_fecha_limite": None,
-            "otm_fecha_ejecucion": None,
-            "otm_fecha_hora_inicio": None,
-            "otm_fecha_hora_fin": None,
+        rows = q.all()
 
-            "reg_fecha_inicio_real": (r.reg_fecha_inicio_real.isoformat() if r.reg_fecha_inicio_real else None),
-            "reg_fecha_programada_original": (r.reg_fecha_programada_original.isoformat() if r.reg_fecha_programada_original else None),
-            "reprogramaciones_cantidad": int(r.reprogramaciones_cantidad or 0),
-            "reprogramaciones_motivo": r.reprogramaciones_motivo,
-
-            "equipo_codigo": r.equipo_codigo,
-            "equipo_tipo": r.equipo_tipo,
-            "equipo_marca": r.equipo_marca,
-            "equipo_modelo": r.equipo_modelo,
-
-            "faena_nombre": r.faena_nombre,
-            "faena_codigo_interno": r.faena_codigo_interno,
-            "actividad_nombre": r.actividad_nombre,
-            "actividad_tipo": r.actividad_tipo,
-            "actividad_estado": r.actividad_estado,
-        } for r in rows]
+        data = []
+        for r in rows:
+            data.append({
+                "id_programa_otm": r.id_programa_otm,
+                "otm_numero": r.otm_numero,
+                "actividad_nombre": r.actividad_nombre,
+                "actividad_estado": r.actividad_estado,
+                "actividad_tipo": r.actividad_tipo,
+                "otm_usuario_programador": r.otm_usuario_programador,
+                "otm_disponibilidad_insumos": r.otm_disponibilidad_insumos,
+                "reg_fecha_inicio_real": r.reg_fecha_inicio_real.isoformat() if r.reg_fecha_inicio_real else None,
+                "reg_fecha_programada_original": r.reg_fecha_programada_original.isoformat() if r.reg_fecha_programada_original else None,
+                "reprogramaciones_cantidad": int(r.reprogramaciones_cantidad) if r.reprogramaciones_cantidad else 0,
+                "reprogramaciones_motivo": r.reprogramaciones_motivo,
+                "equipo_codigo": r.equipo_codigo,
+                "equipo_tipo": r.equipo_tipo,
+                "equipo_marca": r.equipo_marca,
+                "equipo_modelo": r.equipo_modelo,
+                "faena_nombre": r.faena_nombre,
+                "faena_codigo_interno": r.faena_codigo_interno,
+            })
 
         return jsonify({"ok": True, "data": data})
+
     except Exception as e:
         db.rollback()
         return jsonify({"ok": False, "error": str(e)}), 500

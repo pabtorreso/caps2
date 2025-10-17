@@ -1,23 +1,18 @@
-from flask import Blueprint, request, jsonify, current_app
-import psycopg2
-import psycopg2.extras
+# backend/endpoints/query/proxmtto/proxmtto.py
+from flask import Blueprint, request, jsonify
+from sqlalchemy import text
+from database.database import get_db
+from decimal import Decimal
+from datetime import datetime, date
 
 proxmtto_bp = Blueprint("proxmtto_api", __name__, url_prefix="/query/proxmtto")
 
-def _schema() -> str:
-    return current_app.config.get("COSTOS_SCHEMA", "consultas_cgo_ext")
-
-def _get_conn():
-    dsn = (
-        current_app.config.get("ERP_DATABASE_URL")
-        or current_app.config.get("PG_DSN")
-        or current_app.config.get("SQLALCHEMY_DATABASE_URI")
-    )
-    if not dsn:
-        raise RuntimeError("No hay DSN (ERP_DATABASE_URL/PG_DSN/SQLALCHEMY_DATABASE_URI) en config")
-    if dsn.startswith("postgresql+psycopg2://"):
-        dsn = dsn.replace("postgresql+psycopg2://", "postgresql://", 1)
-    return psycopg2.connect(dsn, cursor_factory=psycopg2.extras.RealDictCursor)
+def _to_json(obj):
+    if isinstance(obj, Decimal):
+        return float(obj)
+    elif isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    return obj
 
 def _ok(data):
     return jsonify({"ok": True, "data": data})
@@ -29,254 +24,166 @@ def _err(msg, code=400):
 
 
 # ========= Filtros =========
-@proxmtto_bp.get("/filters/faenas")
+@proxmtto_bp.get("/filters/faenas", strict_slashes=False)
 def filtros_faenas():
-    s = _schema()
-    sql = f"""
-    WITH union_rd AS (
-        SELECT distrito FROM {s}.v_registro_diario_anglo_export
-        UNION ALL SELECT distrito FROM {s}.v_registro_diario_catodo_export
-        UNION ALL SELECT distrito FROM {s}.v_registro_diario_cgo_andina_export
-        UNION ALL SELECT distrito FROM {s}.v_registro_diario_cgo_cumet_ventanas_export
-        UNION ALL SELECT distrito FROM {s}.v_registro_diario_cucons_export
-        UNION ALL SELECT distrito FROM {s}.v_registro_diario_eteo_export
-        UNION ALL SELECT distrito FROM {s}.v_registro_diario_kdm_export
-        UNION ALL SELECT distrito FROM {s}.v_registro_diario_spot_export
-    )
-    SELECT DISTINCT TRIM(distrito) AS faena
-    FROM union_rd
-    WHERE distrito IS NOT NULL AND TRIM(distrito) <> ''
-    ORDER BY 1;
-    """
-    conn = _get_conn()
+    db = next(get_db())
     try:
-        with conn, conn.cursor() as cur:
-            cur.execute(sql)
-            rows = [r["faena"] for r in cur.fetchall()]
-        return _ok(rows)
+        sql = text("""
+            SELECT DISTINCT f.faena_desc
+            FROM proximo_mantenimiento pm
+            JOIN equipo e ON e.equipo_id = pm.equipo_id
+            JOIN programa p ON p.equipo_id = e.equipo_id
+            JOIN faena f ON f.faena_id = p.faena_id
+            ORDER BY f.faena_desc
+        """)
+        
+        rows = db.execute(sql).fetchall()
+        return _ok([r[0] for r in rows])
+    except Exception as e:
+        db.rollback()
+        return _err(str(e), 500)
     finally:
-        conn.close()
+        db.close()
 
 
-@proxmtto_bp.get("/filters/tipos")
+@proxmtto_bp.get("/filters/tipos", strict_slashes=False)
 def filtros_tipos():
     faena = request.args.get("faena", "").strip()
     if not faena:
         return _err("Falta parámetro 'faena'.")
-
-    s = _schema()
-    sql = f"""
-    WITH equipos AS (
-        SELECT equipo FROM {s}.v_registro_diario_anglo_export WHERE distrito = %(faena)s
-        UNION ALL SELECT equipo FROM {s}.v_registro_diario_catodo_export WHERE distrito = %(faena)s
-        UNION ALL SELECT equipo FROM {s}.v_registro_diario_cgo_andina_export WHERE distrito = %(faena)s
-        UNION ALL SELECT equipo FROM {s}.v_registro_diario_cgo_cumet_ventanas_export WHERE distrito = %(faena)s
-        UNION ALL SELECT equipo FROM {s}.v_registro_diario_cucons_export WHERE distrito = %(faena)s
-        UNION ALL SELECT equipo FROM {s}.v_registro_diario_eteo_export WHERE distrito = %(faena)s
-        UNION ALL SELECT equipo FROM {s}.v_registro_diario_kdm_export WHERE distrito = %(faena)s
-        UNION ALL SELECT equipo FROM {s}.v_registro_diario_spot_export WHERE distrito = %(faena)s
-    )
-    SELECT DISTINCT
-        TRIM(REGEXP_REPLACE(SPLIT_PART(equipo, ' - ', 1), '^[A-Z0-9-]+ ', '')) AS tipo_equipo
-    FROM equipos
-    WHERE equipo IS NOT NULL
-    ORDER BY 1;
-    """
-    conn = _get_conn()
+    
+    db = next(get_db())
     try:
-        with conn, conn.cursor() as cur:
-            cur.execute(sql, {"faena": faena})
-            rows = [r["tipo_equipo"] for r in cur.fetchall() if r["tipo_equipo"]]
-        return _ok(rows)
+        sql = text("""
+            SELECT DISTINCT te.tipo_equipo_desc
+            FROM proximo_mantenimiento pm
+            JOIN equipo e ON e.equipo_id = pm.equipo_id
+            JOIN tipo_equipo te ON te.tipo_equipo_id = e.tipo_equipo_id
+            JOIN programa p ON p.equipo_id = e.equipo_id
+            JOIN faena f ON f.faena_id = p.faena_id
+            WHERE f.faena_desc = :faena
+            ORDER BY te.tipo_equipo_desc
+        """)
+        
+        rows = db.execute(sql, {"faena": faena}).fetchall()
+        return _ok([r[0] for r in rows])
+    except Exception as e:
+        db.rollback()
+        return _err(str(e), 500)
     finally:
-        conn.close()
+        db.close()
 
 
-@proxmtto_bp.get("/filters/equipos")
+@proxmtto_bp.get("/filters/equipos", strict_slashes=False)
 def filtros_equipos():
     faena = request.args.get("faena", "").strip()
     tipo = request.args.get("tipo", "").strip()
-    if not faena or not tipo:
-        return _err("Faltan parámetros 'faena' y/o 'tipo'.")
-
-    s = _schema()
-    sql = f"""
-    WITH equipos AS (
-        SELECT equipo_codigo, equipo, distrito FROM {s}.v_registro_diario_anglo_export
-        UNION ALL SELECT equipo_codigo, equipo, distrito FROM {s}.v_registro_diario_catodo_export
-        UNION ALL SELECT equipo_codigo, equipo, distrito FROM {s}.v_registro_diario_cgo_andina_export
-        UNION ALL SELECT equipo_codigo, equipo, distrito FROM {s}.v_registro_diario_cgo_cumet_ventanas_export
-        UNION ALL SELECT equipo_codigo, equipo, distrito FROM {s}.v_registro_diario_cucons_export
-        UNION ALL SELECT equipo_codigo, equipo, distrito FROM {s}.v_registro_diario_eteo_export
-        UNION ALL SELECT equipo_codigo, equipo, distrito FROM {s}.v_registro_diario_kdm_export
-        UNION ALL SELECT equipo_codigo, equipo, distrito FROM {s}.v_registro_diario_spot_export
-    )
-    SELECT DISTINCT TRIM(equipo_codigo) AS equipo_codigo
-    FROM equipos
-    WHERE distrito = %(faena)s
-      AND TRIM(REGEXP_REPLACE(SPLIT_PART(equipo, ' - ', 1), '^[A-Z0-9-]+ ', '')) = %(tipo)s
-      AND equipo_codigo IS NOT NULL
-    ORDER BY 1;
-    """
-    conn = _get_conn()
+    
+    if not faena:
+        return _err("Falta parámetro 'faena'.")
+    
+    db = next(get_db())
     try:
-        with conn, conn.cursor() as cur:
-            cur.execute(sql, {"faena": faena, "tipo": tipo})
-            rows = [r["equipo_codigo"] for r in cur.fetchall()]
-        return _ok(rows)
+        sql_str = """
+            SELECT DISTINCT e.equipo_desc
+            FROM proximo_mantenimiento pm
+            JOIN equipo e ON e.equipo_id = pm.equipo_id
+            JOIN tipo_equipo te ON te.tipo_equipo_id = e.tipo_equipo_id
+            JOIN programa p ON p.equipo_id = e.equipo_id
+            JOIN faena f ON f.faena_id = p.faena_id
+            WHERE f.faena_desc = :faena
+        """
+        params = {"faena": faena}
+        
+        if tipo:
+            sql_str += " AND te.tipo_equipo_desc = :tipo"
+            params["tipo"] = tipo
+        
+        sql_str += " ORDER BY e.equipo_desc"
+        
+        rows = db.execute(text(sql_str), params).fetchall()
+        return _ok([r[0] for r in rows])
+    except Exception as e:
+        db.rollback()
+        return _err(str(e), 500)
     finally:
-        conn.close()
+        db.close()
 
 
-# ========= Data principal =========
-@proxmtto_bp.get("")
-def analisis_proximo_mantenimiento():
-    """
-    Próximo mantenimiento estimado por equipo.
-    Filtros: faena (obligatorio o vacío para todas), tipo (opcional), equipo (opcional).
-    """
-    faena  = request.args.get("faena", "").strip()
-    tipo   = request.args.get("tipo", "").strip()
-    equipo = request.args.get("equipo", "").strip()  # sigue siendo opcional
-    limit  = int(request.args.get("limit", 500))
+# ========= Data Principal =========
+@proxmtto_bp.get("", strict_slashes=False)
+def get_proximo_mantenimiento():
+    faena = request.args.get("faena", "").strip()
+    tipo = request.args.get("tipo", "").strip()
+    equipo_param = request.args.get("equipo", "").strip()
+    limit = int(request.args.get("limit", 500))
     offset = int(request.args.get("offset", 0))
-
-    s = _schema()
-    sql = f"""
-    WITH 
-    promedio_mantencion AS (
-        WITH difs AS (
-            SELECT DISTINCT
-                equipo,
-                horometro_planificacion,
-                LAG(horometro_planificacion, 1, 0) OVER (
-                    PARTITION BY equipo 
-                    ORDER BY horometro_planificacion
-                ) AS horometro_anterior
-            FROM {s}.v_programa_otm
-            WHERE horometro_planificacion IS NOT NULL
-        )
-        SELECT
-            equipo,
-            ROUND(AVG(horometro_planificacion - horometro_anterior), 0) AS promedio_diferencia_horometro
-        FROM difs
-        WHERE horometro_anterior IS NOT NULL
-        GROUP BY equipo
-    ),
-    promedio_semanal AS (
-        WITH horometros_turnos AS (
-            SELECT
-                r.FECHA_INICIO::date AS fecha_inicio,
-                r.EQUIPO_CODIGO,
-                r.distrito,
-                MAX(r.HOROMETRO_FIN) AS horometro_fin
-            FROM (
-                SELECT * FROM {s}.v_registro_diario_anglo_export
-                UNION ALL SELECT * FROM {s}.v_registro_diario_catodo_export
-                UNION ALL SELECT * FROM {s}.v_registro_diario_cgo_andina_export
-                UNION ALL SELECT * FROM {s}.v_registro_diario_cgo_cumet_ventanas_export
-                UNION ALL SELECT * FROM {s}.v_registro_diario_cucons_export
-                UNION ALL SELECT * FROM {s}.v_registro_diario_eteo_export
-                UNION ALL SELECT * FROM {s}.v_registro_diario_kdm_export
-                UNION ALL SELECT * FROM {s}.v_registro_diario_spot_export
-            ) r
-            WHERE r.HOROMETRO_FIN IS NOT NULL
-            GROUP BY r.EQUIPO_CODIGO, r.distrito, r.FECHA_INICIO::date
-        ),
-        diferencias AS (
-            SELECT
-                EQUIPO_CODIGO,
-                fecha_inicio,
-                distrito,
-                horometro_fin,
-                LAG(horometro_fin) OVER (
-                    PARTITION BY EQUIPO_CODIGO 
-                    ORDER BY fecha_inicio
-                ) AS horometro_anterior
-            FROM horometros_turnos
-        )
-        SELECT
-            EQUIPO_CODIGO,
-            distrito,
-            ROUND(AVG(horometro_fin - horometro_anterior), 2) AS promedio_diferencia_horometro
-        FROM diferencias
-        WHERE horometro_anterior IS NOT NULL
-        GROUP BY EQUIPO_CODIGO, distrito
-    ),
-    equipo_tipo AS (
-        SELECT DISTINCT
-            equipo_codigo,
-            TRIM(REGEXP_REPLACE(SPLIT_PART(equipo, ' - ', 1), '^[A-Z0-9-]+ ', '')) AS tipo_equipo
-        FROM {s}.v_registro_diario_anglo_export
-        UNION ALL SELECT DISTINCT equipo_codigo,
-            TRIM(REGEXP_REPLACE(SPLIT_PART(equipo, ' - ', 1), '^[A-Z0-9-]+ ', ''))
-        FROM {s}.v_registro_diario_catodo_export
-        UNION ALL SELECT DISTINCT equipo_codigo,
-            TRIM(REGEXP_REPLACE(SPLIT_PART(equipo, ' - ', 1), '^[A-Z0-9-]+ ', ''))
-        FROM {s}.v_registro_diario_cgo_andina_export
-        UNION ALL SELECT DISTINCT equipo_codigo,
-            TRIM(REGEXP_REPLACE(SPLIT_PART(equipo, ' - ', 1), '^[A-Z0-9-]+ ', ''))
-        FROM {s}.v_registro_diario_cgo_cumet_ventanas_export
-        UNION ALL SELECT DISTINCT equipo_codigo,
-            TRIM(REGEXP_REPLACE(SPLIT_PART(equipo, ' - ', 1), '^[A-Z0-9-]+ ', ''))
-        FROM {s}.v_registro_diario_cucons_export
-        UNION ALL SELECT DISTINCT equipo_codigo,
-            TRIM(REGEXP_REPLACE(SPLIT_PART(equipo, ' - ', 1), '^[A-Z0-9-]+ ', ''))
-        FROM {s}.v_registro_diario_eteo_export
-        UNION ALL SELECT DISTINCT equipo_codigo,
-            TRIM(REGEXP_REPLACE(SPLIT_PART(equipo, ' - ', 1), '^[A-Z0-9-]+ ', ''))
-        FROM {s}.v_registro_diario_kdm_export
-        UNION ALL SELECT DISTINCT equipo_codigo,
-            TRIM(REGEXP_REPLACE(SPLIT_PART(equipo, ' - ', 1), '^[A-Z0-9-]+ ', ''))
-        FROM {s}.v_registro_diario_spot_export
-    ),
-    ultimo_mant AS (
-        SELECT DISTINCT
-            equipo,
-            MAX(fecha_ejecucion_otm) AS fecha_mentenimiento,
-            MAX(horometro_planificacion) AS horometro_ultimo_mant
-        FROM {s}.v_programa_otm
-        GROUP BY equipo
-    )
-    SELECT
-        u.equipo AS equipo_codigo,
-        s1.distrito AS faena,
-        u.horometro_ultimo_mantenimiento,
-        u.fecha_mentenimiento      AS fecha_ultimo_mantenimiento,
-        p.promedio_diferencia_horometro AS promedio_horas_entre_mantenimientos,
-        s1.promedio_diferencia_horometro AS promedio_horas_trabajadas_diarias,
-        CASE 
-            WHEN COALESCE(s1.promedio_diferencia_horometro, 0) = 0 THEN NULL
-            ELSE ROUND(p.promedio_diferencia_horometro / s1.promedio_diferencia_horometro, 1)
-        END AS dias_restantes_aprox,
-        CASE 
-            WHEN COALESCE(s1.promedio_diferencia_horometro, 0) = 0 THEN NULL
-            ELSE CURRENT_DATE + (p.promedio_diferencia_horometro / s1.promedio_diferencia_horometro) * interval '1 day'
-        END::date AS fecha_proximo_mantenimiento,
-        (u.horometro_ultimo_mantenimiento + p.promedio_diferencia_horometro) AS horometro_estimado_proximo_mantenimiento
-    FROM (
-        SELECT equipo, fecha_mentenimiento, horometro_ultimo_mant AS horometro_ultimo_mantenimiento
-        FROM ultimo_mant
-    ) u
-    JOIN promedio_mantencion p ON p.equipo = u.equipo
-    JOIN promedio_semanal s1   ON s1.EQUIPO_CODIGO = u.equipo
-    LEFT JOIN equipo_tipo et   ON et.equipo_codigo = u.equipo
-    WHERE COALESCE(s1.promedio_diferencia_horometro, 0) > 0
-      AND (%(faena)s  = '' OR s1.distrito = %(faena)s)
-      AND (%(tipo)s   = '' OR et.tipo_equipo = %(tipo)s)
-      AND (%(equipo)s = '' OR u.equipo = %(equipo)s)
-    ORDER BY fecha_proximo_mantenimiento ASC
-    LIMIT %(limit)s OFFSET %(offset)s;
-    """
-
-    params = {"faena": faena, "tipo": tipo, "equipo": equipo, "limit": limit, "offset": offset}
-
-    conn = _get_conn()
+    
+    db = next(get_db())
     try:
-        with conn, conn.cursor() as cur:
-            cur.execute("SET LOCAL statement_timeout = '45s';")
-            cur.execute(sql, params)
-            rows = cur.fetchall()
-        return _ok(rows)
+        sql_str = """
+            SELECT 
+                e.equipo_desc,
+                f.faena_desc,
+                pm.ultimo_horometro_otm,
+                pm.fec_ultima_otm,
+                pm.prom_horas_entre_otm,
+                pm.prom_horas_trabajadas_diarias,
+                pm.dias_restantes,
+                pm.fecha_prox_otm,
+                pm.horometro_prox_otm
+            FROM proximo_mantenimiento pm
+            JOIN equipo e ON e.equipo_id = pm.equipo_id
+            LEFT JOIN tipo_equipo te ON te.tipo_equipo_id = e.tipo_equipo_id
+            LEFT JOIN (
+                SELECT DISTINCT ON (equipo_id) 
+                    equipo_id, faena_id
+                FROM programa
+                ORDER BY equipo_id, programa_id DESC
+            ) p ON p.equipo_id = e.equipo_id
+            LEFT JOIN faena f ON f.faena_id = p.faena_id
+            WHERE 1=1
+        """
+        
+        params = {}
+        
+        if faena:
+            sql_str += " AND f.faena_desc = :faena"
+            params["faena"] = faena
+        
+        if tipo:
+            sql_str += " AND te.tipo_equipo_desc = :tipo"
+            params["tipo"] = tipo
+        
+        if equipo_param:
+            sql_str += " AND e.equipo_desc = :equipo"
+            params["equipo"] = equipo_param
+        
+        sql_str += " ORDER BY pm.dias_restantes ASC NULLS LAST LIMIT :limit OFFSET :offset"
+        params["limit"] = limit
+        params["offset"] = offset
+        
+        rows = db.execute(text(sql_str), params).fetchall()
+        
+        # ✅ NOMBRES CORREGIDOS PARA COINCIDIR CON EL FRONTEND
+        data = []
+        for r in rows:
+            data.append({
+                "equipo_codigo": r[0],  # ✅ era "equipo"
+                "faena": r[1],
+                "horometro_ultimo_mantenimiento": _to_json(r[2]),  # ✅ era "horo_ultimo_mant"
+                "fecha_ultimo_mantenimiento": _to_json(r[3]),  # ✅ era "f_ultimo_mant"
+                "promedio_horas_entre_mantenimientos": _to_json(r[4]),  # ✅ era "prom_horas_entre_mant"
+                "promedio_horas_trabajadas_diarias": _to_json(r[5]),  # ✅ era "prom_horas_diarias"
+                "dias_restantes_aprox": _to_json(r[6]),  # ✅ era "dias_restantes"
+                "fecha_proximo_mantenimiento": _to_json(r[7]),  # ✅ era "f_proximo_mant"
+                "horometro_estimado_proximo_mantenimiento": _to_json(r[8]),  # ✅ era "horo_estimado_proximo"
+            })
+        
+        return _ok(data)
+    
+    except Exception as e:
+        db.rollback()
+        return _err(str(e), 500)
     finally:
-        conn.close()
+        db.close()

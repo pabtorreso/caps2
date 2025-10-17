@@ -1,10 +1,16 @@
-import { useEffect, useMemo, useState } from "react";
 import axios from "@/services/axiosInstance";
 import "@/styles/reprogramaciones.css";
+import { useEffect, useMemo, useState } from "react";
 import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell, Legend,
+  Pie,
+  PieChart,
   ResponsiveContainer,
-  BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid,
-  PieChart, Pie, Cell, Legend,
+  Tooltip,
+  XAxis, YAxis,
 } from "recharts";
 
 /* ===== Modal Full-Screen (JSX) ===== */
@@ -308,7 +314,7 @@ export default function Reprogramaciones() {
           <table className="rep-table">
             <thead>
               <tr>
-                <th>OTM</th><th>Equipo</th><th>Faena</th><th>Prioridad</th>
+                <th>OTM</th><th>Equipo</th><th>Faena</th>
                 <th># Reprog.</th><th>F. Prog. Orig.</th><th>F. Inicio Real</th><th>Acción</th>
               </tr>
             </thead>
@@ -318,7 +324,6 @@ export default function Reprogramaciones() {
                   <td className="mono">{r.otm_numero}</td>
                   <td className="mono">{r.equipo_codigo}</td>
                   <td>{r.faena_nombre}</td>
-                  <td>{safe(r.otm_prioridad)}</td>
                   <td className="mono">{r.reprogramaciones_cantidad}</td>
                   <td className="mono">{fmt(r.reg_fecha_programada_original)}</td>
                   <td className="mono">{fmt(r.reg_fecha_inicio_real)}</td>
