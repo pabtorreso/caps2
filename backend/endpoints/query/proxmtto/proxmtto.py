@@ -165,19 +165,18 @@ def get_proximo_mantenimiento():
         
         rows = db.execute(text(sql_str), params).fetchall()
         
-        # ✅ NOMBRES CORREGIDOS PARA COINCIDIR CON EL FRONTEND
         data = []
         for r in rows:
             data.append({
-                "equipo_codigo": r[0],  # ✅ era "equipo"
+                "equipo_codigo": r[0], 
                 "faena": r[1],
-                "horometro_ultimo_mantenimiento": _to_json(r[2]),  # ✅ era "horo_ultimo_mant"
-                "fecha_ultimo_mantenimiento": _to_json(r[3]),  # ✅ era "f_ultimo_mant"
-                "promedio_horas_entre_mantenimientos": _to_json(r[4]),  # ✅ era "prom_horas_entre_mant"
-                "promedio_horas_trabajadas_diarias": _to_json(r[5]),  # ✅ era "prom_horas_diarias"
-                "dias_restantes_aprox": _to_json(r[6]),  # ✅ era "dias_restantes"
-                "fecha_proximo_mantenimiento": _to_json(r[7]),  # ✅ era "f_proximo_mant"
-                "horometro_estimado_proximo_mantenimiento": _to_json(r[8]),  # ✅ era "horo_estimado_proximo"
+                "horometro_ultimo_mantenimiento": _to_json(r[2]),  
+                "fecha_ultimo_mantenimiento": _to_json(r[3]),  
+                "promedio_horas_entre_mantenimientos": _to_json(r[4]),  
+                "promedio_horas_trabajadas_diarias": _to_json(r[5]),  
+                "dias_restantes_aprox": _to_json(r[6]),  
+                "fecha_proximo_mantenimiento": _to_json(r[7]), 
+                "horometro_estimado_proximo_mantenimiento": _to_json(r[8]),  
             })
         
         return _ok(data)
